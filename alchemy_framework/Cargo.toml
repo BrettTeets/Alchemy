@@ -1,0 +1,12 @@
+[package]
+name = "alchemy_framework"
+version = "0.1.0"
+authors = ["Ops Fox <opsfox245@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+winit = "0.24.0"
+winit_input_helper = "0.9"
+log = "0.4"

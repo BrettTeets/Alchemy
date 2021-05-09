@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+    "use_case",
+    "alchemy_framework",
+]
