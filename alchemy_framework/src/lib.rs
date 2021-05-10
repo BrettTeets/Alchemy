@@ -1,4 +1,7 @@
 pub mod app_window;
+pub mod graphics;
+pub mod texture;
+
 
 #[cfg(test)]
 mod tests {

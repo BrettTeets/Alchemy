@@ -4,10 +4,14 @@ use winit::event::{Event, VirtualKeyCode};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
+use futures;
+
+use crate::graphics;
 
 pub struct AppWindow{
     width: u32,
     height: u32,
+    state: graphics::State,
     window: winit::window::Window,
     
 }
@@ -24,10 +28,14 @@ impl AppWindow{
                 .build(&event_loop)
                 .unwrap()
             };
+        
+        use futures::executor::block_on;
+        let state = block_on(graphics::State::new(&window));
 
         return Self{
             width,
             height,
+            state,
             window,
         }
     }
