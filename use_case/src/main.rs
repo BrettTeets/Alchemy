@@ -7,6 +7,6 @@ const HEIGHT: u32 = 800;
 
 fn main() {
     let event_loop = EventLoop::new();
-    let domain = AppWindow::new(HEIGHT, WIDTH, &event_loop);
-    AppWindow::run(event_loop, domain);
+    let app = AppWindow::new(HEIGHT, WIDTH, &event_loop);
+    AppWindow::run(event_loop, app);
 }
