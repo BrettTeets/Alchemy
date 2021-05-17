@@ -86,10 +86,10 @@ impl AppWindow{
                             _ => {}
                         },
                         WindowEvent::Resized(physical_size) => {
-                            app.on_resize(&physical_size)
+                            app.on_resize(*physical_size)
                         }
                         WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                            app.on_resize(*new_inner_size)
+                            app.on_resize(**new_inner_size)
                         }
                         _ => {}
                     }
@@ -128,8 +128,8 @@ impl AppWindow{
 
     }
 
-    pub fn on_resize(&mut self, physical_size: &winit::dpi::PhysicalSize<u32>){
-        
+    pub fn on_resize(&mut self, physical_size: winit::dpi::PhysicalSize<u32>){
+        self.state.resize(physical_size);
     }
 
     pub fn on_update(&mut self, time: std::time::Duration){
