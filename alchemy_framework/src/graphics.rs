@@ -5,6 +5,7 @@ use winit::window::Window;
 use log::{error, warn, info, debug, trace};
 use wgpu::Instance;
 use wgpu::*;
+use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 
 pub struct State {
     surface: wgpu::Surface,
@@ -14,6 +15,8 @@ pub struct State {
     swap_chain: wgpu::SwapChain,
     pub size: winit::dpi::PhysicalSize<u32>,
     depth_texture: texture::Texture,
+    glyph_brush: wgpu_glyph::GlyphBrush<()>,
+    staging_belt: wgpu::util::StagingBelt,
 }
 
 impl State {
@@ -35,9 +38,10 @@ impl State {
             None, // Trace path
         ).await.unwrap();
 
+        let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
         let sc_desc = wgpu::SwapChainDescriptor {
             usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            format: render_format,
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::Fifo,
@@ -46,7 +50,15 @@ impl State {
         let swap_chain = device.create_swap_chain(&surface, &sc_desc);
         let depth_texture = texture::Texture::create_depth_texture(&device, &sc_desc, "depth_texture");
 
+        let inconsolata = ab_glyph::FontArc::try_from_slice(include_bytes!(
+            "Inconsolata-Regular.ttf")).expect("Could not load font.");
         //load effects in here.
+        let glyph_brush = GlyphBrushBuilder::using_font(inconsolata).build(&device, render_format);
+
+        // Create staging belt and a local pool
+        let staging_belt = wgpu::util::StagingBelt::new(1024);
+        let local_pool = futures::executor::LocalPool::new();
+        let local_spawner = local_pool.spawner();
 
         Self {
             surface,
@@ -56,6 +68,8 @@ impl State {
             swap_chain,
             size,
             depth_texture,
+            glyph_brush,
+            staging_belt,
         }
     }
 
@@ -103,6 +117,38 @@ impl State {
 
         }
 
+        //nifty.
+        self.glyph_brush.queue(Section {
+            screen_position: (30.0, 30.0),
+            bounds: (self.size.width as f32, self.size.height as f32),
+            text: vec![Text::new("Hello wgpu_glyph!")
+                .with_color([0.0, 0.0, 0.0, 1.0])
+                .with_scale(40.0)],
+            ..Section::default()
+        });
+
+        self.glyph_brush.queue(Section {
+            screen_position: (30.0, 90.0),
+            bounds: (self.size.width as f32, self.size.height as f32),
+            text: vec![Text::new("Hello wgpu_glyph!")
+                .with_color([1.0, 1.0, 1.0, 1.0])
+                .with_scale(40.0)],
+            ..Section::default()
+        });
+
+        // Draw the text!
+        self.glyph_brush
+            .draw_queued(
+                &self.device,
+                &mut self.staging_belt,
+                &mut encoder,
+                &frame.view,
+                self.size.width,
+                self.size.height,
+            )
+            .expect("Draw queued");
+
+        self.staging_belt.finish();
         self.queue.submit(iter::once(encoder.finish()));
 
         Ok(())
