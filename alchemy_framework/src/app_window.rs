@@ -1,13 +1,9 @@
-use log::error;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, VirtualKeyCode};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
-use winit::{
-    event::*,
-    
-};
+use winit::{ event::*};
 use futures;
 
 use crate::graphics;
@@ -48,23 +44,21 @@ impl AppWindow{
 
     pub fn run(event_loop: EventLoop<()>, mut app: Self) -> !
     {
-        
-        //let event_loop = EventLoop::new();
         let mut input = WinitInputHelper::new();
-        //For Timing purposes.
         let mut last_render_time = std::time::Instant::now();
 
-        event_loop.run(move |event, _, control_flow| {
-            // Draw the current frame
+        event_loop.run(move |event, _, mut control_flow| {
+            //So I am just going to update input here at the beginning of the loop and then pass
+            //it to the application when the time comes.
+            input.update(&event);
+            if input.key_pressed(VirtualKeyCode::Escape) {*control_flow = ControlFlow::Exit;}
+            
             match event {
                 //Event main events are cleared with request a redraw?
                 Event::MainEventsCleared => app.window.request_redraw(),
-                //Is this the graphics device or another device?
-                Event::DeviceEvent {
-                    ref event,
-                    .. // We're not using device_id currently
-                } => {
-                    app.on_input(event);
+                //I am not handling events or device Id here, 
+                Event::DeviceEvent {..} => {
+                    app.on_input(&input);
                 }
                 //Handle window specific events and other things winit picks up I guess.
                 Event::WindowEvent {
@@ -75,16 +69,6 @@ impl AppWindow{
                         WindowEvent::CloseRequested => {
                             app.on_exit();
                             *control_flow = ControlFlow::Exit},
-                        WindowEvent::KeyboardInput { input, .. } => match input {
-                            KeyboardInput {
-                                state: ElementState::Pressed,
-                                virtual_keycode: Some(VirtualKeyCode::Escape),
-                                ..
-                            } => {
-                                *control_flow = ControlFlow::Exit;
-                            }
-                            _ => {}
-                        },
                         WindowEvent::Resized(physical_size) => {
                             app.on_resize(*physical_size)
                         }
@@ -94,33 +78,32 @@ impl AppWindow{
                         _ => {}
                     }
                 }
-                //now handle those redraw events.
+                //I am unsure about the ordering of this, when is this happening in the course of the program?
                 Event::RedrawRequested(_) => {
                     let now = std::time::Instant::now();
-                    let dt = now - last_render_time;
+                    let delta_time = now - last_render_time;
                     last_render_time = now;
-                    app.on_update(dt);
-                    app.on_draw();
+                    app.on_update(delta_time);
+                    app.on_draw(&mut control_flow);
                 }
                 _ => {}
-            } 
-            
-        });
-    }
+            }//End match statement.
+        });//End Run Loop.
+    }//End Run function.
 
-    fn on_draw(&mut self) {
-        match self.state.render() {
+    fn on_draw(&mut self, control_flow: &mut winit::event_loop::ControlFlow) {
+        match self.state.render()  {
             Ok(_) => {}
             // Recreate the swap_chain if lost
             Err(wgpu::SwapChainError::Lost) => self.state.resize(self.state.size),
             // The system is out of memory, we should probably quit
-            //Err(wgpu::SwapChainError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+            Err(wgpu::SwapChainError::OutOfMemory) => *control_flow = ControlFlow::Exit,
             // All other errors (Outdated, Timeout) should be resolved by the next frame
             Err(e) => eprintln!("{:?}", e),
         }
     }
 
-    fn on_input(&self, event: &winit::event::DeviceEvent){
+    fn on_input(&self, input: &winit_input_helper::WinitInputHelper){
 
     }
 
