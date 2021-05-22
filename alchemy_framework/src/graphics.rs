@@ -3,6 +3,11 @@ use std::iter;
 use winit::window::Window;
 #[allow(unused_imports)]
 use log::{error, warn, info, debug, trace};
+use winit::{
+    event::*,
+    event_loop::{ControlFlow, EventLoop},
+    window::{WindowBuilder},
+};
 
 pub struct State {
     surface: wgpu::Surface,
@@ -14,10 +19,13 @@ pub struct State {
     depth_texture: texture::Texture,
     render_pipeline: wgpu::RenderPipeline,
     //Should move this out of here.
-    camera: crate::camera::Camera,
+    camera: crate::camera::Camera, // UPDATED!
+    projection: crate::camera::Projection, // NEW!
+    camera_controller: crate::camera::CameraController, // UPDATED!
     uniforms: crate::camera::Uniforms,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    mouse_pressed: bool,
 }
 
 impl State {
@@ -52,21 +60,12 @@ impl State {
         let depth_texture = texture::Texture::create_depth_texture(&device, &sc_desc, "depth_texture");
 
         //NEW CAMERA CODE
-        let camera = crate::camera::Camera {
-            // position the camera one unit up and 2 units back
-            // +z is out of the screen
-            eye: (0.0, 1.0, 2.0).into(),
-            // have it look at the origin
-            target: (0.0, 0.0, 0.0).into(),
-            // which way is "up"
-            up: cgmath::Vector3::unit_y(),
-            aspect: sc_desc.width as f32 / sc_desc.height as f32,
-            fovy: 45.0,
-            znear: 0.1,
-            zfar: 100.0,
-        };
+        let camera = crate::camera::Camera::new((0.0, 5.0, 10.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));
+        let projection = crate::camera::Projection::new(sc_desc.width, sc_desc.height, cgmath::Deg(45.0), 0.001, 100.0);
+        let camera_controller = crate::camera::CameraController::new(4.0, 0.4);
+
         let mut uniforms = crate::camera::Uniforms::new();
-        uniforms.update_view_proj(&camera);
+        uniforms.update_view_proj(&camera, &projection); 
         use wgpu::util::DeviceExt;
         let uniform_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -89,7 +88,7 @@ impl State {
                 }
             ],
             label: Some("uniform_bind_group_layout"),
-        });
+        });        
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &uniform_bind_group_layout,
             entries: &[
@@ -166,9 +165,13 @@ impl State {
             depth_texture,
             render_pipeline,
             camera,
+            projection, 
+            camera_controller,
             uniforms,
             uniform_buffer,
             uniform_bind_group,
+            mouse_pressed: false,
+            
         }
     }
 
@@ -177,9 +180,49 @@ impl State {
         self.sc_desc.width = new_size.width;
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
-
+        
+        self.projection.resize(new_size.width, new_size.height);
+        
         self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.sc_desc, "depth_texture");
     }
+
+    pub fn input(&mut self, event: &DeviceEvent) -> bool {
+        match event {
+            DeviceEvent::Key(
+                KeyboardInput {
+                    virtual_keycode: Some(key),
+                    state,
+                    ..
+                }
+            ) => self.camera_controller.process_keyboard(*key, *state),
+            DeviceEvent::MouseWheel { delta, .. } => {
+                self.camera_controller.process_scroll(delta);
+                true
+            }
+            DeviceEvent::Button {
+                button: 1, // Left Mouse Button
+                state,
+            } => {
+                self.mouse_pressed = *state == ElementState::Pressed;
+                true
+            }
+            DeviceEvent::MouseMotion { delta } => {
+                if self.mouse_pressed {
+                    self.camera_controller.process_mouse(delta.0, delta.1);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn update(&mut self, dt: std::time::Duration) {
+        self.camera_controller.update_camera(&mut self.camera, dt);
+        self.uniforms.update_view_proj(&self.camera, &self.projection);
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[self.uniforms]));
+    }
+    
+    
 
     pub fn render(&mut self) -> Result<(), wgpu::SwapChainError> {
         let frame = self.swap_chain.get_current_frame()?.output;

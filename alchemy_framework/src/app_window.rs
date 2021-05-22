@@ -57,8 +57,9 @@ impl AppWindow{
                 //Event main events are cleared with request a redraw?
                 Event::MainEventsCleared => app.window.request_redraw(),
                 //I am not handling events or device Id here, 
-                Event::DeviceEvent {..} => {
-                    app.on_input(&input);
+                Event::DeviceEvent { ref event, ..} => {
+                    //doubling up while we sort this code out.
+                    app.on_input(event, &input);
                 }
                 //Handle window specific events and other things winit picks up I guess.
                 Event::WindowEvent {
@@ -84,6 +85,7 @@ impl AppWindow{
                     let delta_time = now - last_render_time;
                     last_render_time = now;
                     app.on_update(delta_time);
+
                     app.on_draw(&mut control_flow);
                 }
                 _ => {}
@@ -103,8 +105,8 @@ impl AppWindow{
         }
     }
 
-    fn on_input(&self, input: &winit_input_helper::WinitInputHelper){
-
+    fn on_input(&mut self, event: &DeviceEvent, input: &winit_input_helper::WinitInputHelper){
+        self.state.input(event);
     }
 
     fn on_exit(&self){
@@ -116,6 +118,6 @@ impl AppWindow{
     }
 
     pub fn on_update(&mut self, time: std::time::Duration){
-        
+        self.state.update(time);
     }
 }
