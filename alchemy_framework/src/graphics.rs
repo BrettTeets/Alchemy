@@ -3,9 +3,6 @@ use std::iter;
 use winit::window::Window;
 #[allow(unused_imports)]
 use log::{error, warn, info, debug, trace};
-use wgpu::Instance;
-use wgpu::*;
-use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 
 pub struct State {
     surface: wgpu::Surface,
@@ -15,9 +12,12 @@ pub struct State {
     swap_chain: wgpu::SwapChain,
     pub size: winit::dpi::PhysicalSize<u32>,
     depth_texture: texture::Texture,
-    glyph_brush: wgpu_glyph::GlyphBrush<()>,
-    staging_belt: wgpu::util::StagingBelt,
     render_pipeline: wgpu::RenderPipeline,
+    //Should move this out of here.
+    camera: crate::camera::Camera,
+    uniforms: crate::camera::Uniforms,
+    uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
 }
 
 impl State {
@@ -51,23 +51,63 @@ impl State {
         let swap_chain = device.create_swap_chain(&surface, &sc_desc);
         let depth_texture = texture::Texture::create_depth_texture(&device, &sc_desc, "depth_texture");
 
-        let inconsolata = ab_glyph::FontArc::try_from_slice(include_bytes!(
-            "Inconsolata-Regular.ttf")).expect("Could not load font.");
-        //load effects in here.
-        let glyph_brush = GlyphBrushBuilder::using_font(inconsolata).build(&device, render_format);
-
-        // Create staging belt and a local pool
-        let staging_belt = wgpu::util::StagingBelt::new(1024);
-        let local_pool = futures::executor::LocalPool::new();
-        let local_spawner = local_pool.spawner();
-
+        //NEW CAMERA CODE
+        let camera = crate::camera::Camera {
+            // position the camera one unit up and 2 units back
+            // +z is out of the screen
+            eye: (0.0, 1.0, 2.0).into(),
+            // have it look at the origin
+            target: (0.0, 0.0, 0.0).into(),
+            // which way is "up"
+            up: cgmath::Vector3::unit_y(),
+            aspect: sc_desc.width as f32 / sc_desc.height as f32,
+            fovy: 45.0,
+            znear: 0.1,
+            zfar: 100.0,
+        };
+        let mut uniforms = crate::camera::Uniforms::new();
+        uniforms.update_view_proj(&camera);
+        use wgpu::util::DeviceExt;
+        let uniform_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[uniforms]),
+                usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+            }
+        );
+        let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStage::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("uniform_bind_group_layout"),
+        });
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("uniform_bind_group"),
+        });
+        //END CAMERA CODE
 
         let vs_module = device.create_shader_module(&wgpu::include_spirv!("shader.vert.spv"));
         let fs_module = device.create_shader_module(&wgpu::include_spirv!("shader.frag.spv"));
         let render_pipeline_layout =
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&uniform_bind_group_layout],
             push_constant_ranges: &[],
         });
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -112,7 +152,9 @@ impl State {
             },
         });
 
-
+        
+        
+        
 
         Self {
             surface,
@@ -122,9 +164,11 @@ impl State {
             swap_chain,
             size,
             depth_texture,
-            glyph_brush,
-            staging_belt,
             render_pipeline,
+            camera,
+            uniforms,
+            uniform_buffer,
+            uniform_bind_group,
         }
     }
 
@@ -171,42 +215,11 @@ impl State {
             });
             
             render_pass.set_pipeline(&self.render_pipeline); // 2.
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.draw(0..3, 0..1); // 3.
 
         }
 
-        //nifty.
-        self.glyph_brush.queue(Section {
-            screen_position: (30.0, 30.0),
-            bounds: (self.size.width as f32, self.size.height as f32),
-            text: vec![Text::new("Hello wgpu_glyph!")
-                .with_color([0.0, 0.0, 0.0, 1.0])
-                .with_scale(40.0)],
-            ..Section::default()
-        });
-
-        self.glyph_brush.queue(Section {
-            screen_position: (30.0, 90.0),
-            bounds: (self.size.width as f32, self.size.height as f32),
-            text: vec![Text::new("Hello wgpu_glyph!")
-                .with_color([1.0, 1.0, 1.0, 1.0])
-                .with_scale(40.0)],
-            ..Section::default()
-        });
-
-        // Draw the text!
-        self.glyph_brush
-            .draw_queued(
-                &self.device,
-                &mut self.staging_belt,
-                &mut encoder,
-                &frame.view,
-                self.size.width,
-                self.size.height,
-            )
-            .expect("Draw queued");
-
-        self.staging_belt.finish();
         self.queue.submit(iter::once(encoder.finish()));
 
         Ok(())

@@ -1,6 +1,7 @@
 pub mod app_window;
 pub mod graphics;
 pub mod texture;
+pub mod camera;
 
 
 #[cfg(test)]
