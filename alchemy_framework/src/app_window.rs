@@ -13,7 +13,10 @@ pub struct AppWindow{
     height: u32,
     state: graphics::State,
     window: winit::window::Window,
-    
+    //For now this can live here.
+    camera: crate::camera::CameraObject,
+    camera_gpu_object: crate::camera::GPUObject<crate::camera::Uniforms>,
+    mouse_pressed: bool,
 }
 
 impl AppWindow{
@@ -32,13 +35,42 @@ impl AppWindow{
         //Maybe have appwindow also return a &window and let the engine place the graphics state?
         //or leave the window with a single graphics state? 
         use futures::executor::block_on;
-        let state = block_on(graphics::State::new(&window));
+        let mut state = block_on(graphics::State::new(&window));
+
+        //While it might be easier to build the camera first and then pass it while building the state I think the
+        //API will work better if you set up the camera and other gpu object afterwards.
+        let uniform_bind_group_layout = state.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStage::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("uniform_bind_group_layout"),
+        });
+
+        let mut camera = crate::camera::CameraObject::new(&state.sc_desc);
+        camera.update();
+        let camera_gpu_object = crate::camera::GPUObject::new(&state.device, &uniform_bind_group_layout, camera.uniforms);
+        //END CAMERA CODE
+
+        //Init the render Pipeline here for now.
+        state.init_pipeline(&uniform_bind_group_layout);
 
         return Self{
             width,
             height,
             state,
             window,
+            camera,
+            camera_gpu_object,
+            mouse_pressed: false,
         }
     }
 
@@ -94,7 +126,7 @@ impl AppWindow{
     }//End Run function.
 
     fn on_draw(&mut self, control_flow: &mut winit::event_loop::ControlFlow) {
-        match self.state.render()  {
+        match self.state.render(&self.camera_gpu_object)  {
             Ok(_) => {}
             // Recreate the swap_chain if lost
             Err(wgpu::SwapChainError::Lost) => self.state.resize(self.state.size),
@@ -105,8 +137,34 @@ impl AppWindow{
         }
     }
 
-    fn on_input(&mut self, event: &DeviceEvent, input: &winit_input_helper::WinitInputHelper){
-        self.state.input(event);
+    fn on_input(&mut self, event: &DeviceEvent, input: &winit_input_helper::WinitInputHelper) -> bool{
+        match event {
+            DeviceEvent::Key(
+                KeyboardInput {
+                    virtual_keycode: Some(key),
+                    state,
+                    ..
+                }
+            ) => self.camera.controller.process_keyboard(*key, *state),
+            DeviceEvent::MouseWheel { delta, .. } => {
+                self.camera.controller.process_scroll(delta);
+                true
+            }
+            DeviceEvent::Button {
+                button: 1, // Left Mouse Button
+                state,
+            } => {
+                self.mouse_pressed = *state == ElementState::Pressed;
+                true
+            }
+            DeviceEvent::MouseMotion { delta } => {
+                if self.mouse_pressed {
+                    self.camera.controller.process_mouse(delta.0, delta.1);
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     fn on_exit(&self){
@@ -115,9 +173,12 @@ impl AppWindow{
 
     pub fn on_resize(&mut self, physical_size: winit::dpi::PhysicalSize<u32>){
         self.state.resize(physical_size);
+        self.camera.resize(physical_size);
     }
 
     pub fn on_update(&mut self, time: std::time::Duration){
-        self.state.update(time);
+        self.camera.controller.update_camera(&mut self.camera.camera, time);
+        self.camera.update();
+        self.state.write_buffer(&self.camera_gpu_object.buffer, self.camera.uniforms)
     }
 }

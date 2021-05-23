@@ -15,11 +15,7 @@ pub struct State {
     swap_chain: wgpu::SwapChain,
     pub size: winit::dpi::PhysicalSize<u32>,
     depth_texture: texture::Texture,
-    render_pipeline: wgpu::RenderPipeline,
-    //Should move this out of here.
-    camera: crate::camera::CameraObject, // UPDATED!
-    camera_gpu_object: crate::camera::GPUObject<crate::camera::Uniforms>,
-    mouse_pressed: bool,
+    render_pipeline: Option<wgpu::RenderPipeline>, //This is initialized later.
 }
 
 impl State {
@@ -53,37 +49,28 @@ impl State {
         let swap_chain = device.create_swap_chain(&surface, &sc_desc);
         let depth_texture = texture::Texture::create_depth_texture(&device, &sc_desc, "depth_texture");
 
-        //NEW CAMERA CODE
-        let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStage::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }
-            ],
-            label: Some("uniform_bind_group_layout"),
-        });
+        Self {
+            surface,
+            device,
+            queue,
+            sc_desc,
+            swap_chain,
+            size,
+            depth_texture,
+            render_pipeline: None,
+        }
+    }
 
-        let mut camera = crate::camera::CameraObject::new(&sc_desc);
-        camera.update();
-        let camera_gpu_object = crate::camera::GPUObject::new(&device, &uniform_bind_group_layout, camera.uniforms);
-        //END CAMERA CODE
-
-        let vs_module = device.create_shader_module(&wgpu::include_spirv!("shader.vert.spv"));
-        let fs_module = device.create_shader_module(&wgpu::include_spirv!("shader.frag.spv"));
+    pub fn init_pipeline(&mut self, bind_group_layout: &wgpu::BindGroupLayout){
+        let vs_module = self.device.create_shader_module(&wgpu::include_spirv!("shader.vert.spv"));
+        let fs_module = self.device.create_shader_module(&wgpu::include_spirv!("shader.frag.spv"));
         let render_pipeline_layout =
-        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&uniform_bind_group_layout],
+            bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let render_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
@@ -95,7 +82,7 @@ impl State {
                 module: &fs_module,
                 entry_point: "main",
                 targets: &[wgpu::ColorTargetState { // 4.
-                    format: sc_desc.format,
+                    format: self.sc_desc.format,
                     alpha_blend: wgpu::BlendState::REPLACE,
                     color_blend: wgpu::BlendState::REPLACE,
                     write_mask: wgpu::ColorWrite::ALL,
@@ -125,19 +112,7 @@ impl State {
             },
         });
 
-        Self {
-            surface,
-            device,
-            queue,
-            sc_desc,
-            swap_chain,
-            size,
-            depth_texture,
-            render_pipeline,
-            camera,
-            camera_gpu_object,
-            mouse_pressed: false,
-        }
+        self.render_pipeline = Some(render_pipeline);
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -145,50 +120,15 @@ impl State {
         self.sc_desc.width = new_size.width;
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
-        
-        self.camera.resize(new_size);
-        
         self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.sc_desc, "depth_texture");
     }
 
-    pub fn input(&mut self, event: &DeviceEvent) -> bool {
-        match event {
-            DeviceEvent::Key(
-                KeyboardInput {
-                    virtual_keycode: Some(key),
-                    state,
-                    ..
-                }
-            ) => self.camera.controller.process_keyboard(*key, *state),
-            DeviceEvent::MouseWheel { delta, .. } => {
-                self.camera.controller.process_scroll(delta);
-                true
-            }
-            DeviceEvent::Button {
-                button: 1, // Left Mouse Button
-                state,
-            } => {
-                self.mouse_pressed = *state == ElementState::Pressed;
-                true
-            }
-            DeviceEvent::MouseMotion { delta } => {
-                if self.mouse_pressed {
-                    self.camera.controller.process_mouse(delta.0, delta.1);
-                }
-                true
-            }
-            _ => false,
-        }
-    }
-
-    pub fn update(&mut self, dt: std::time::Duration) {
-        self.camera.controller.update_camera(&mut self.camera.camera, dt);
-        self.camera.uniforms.update_view_proj(&self.camera.camera, &self.camera.projection);
-        self.queue.write_buffer(&self.camera_gpu_object.buffer, 0, bytemuck::cast_slice(&[self.camera.uniforms]));
+    pub fn write_buffer(&mut self, buffer: &wgpu::Buffer, bytes: impl bytemuck::Pod ){
+        self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&[bytes]));
     }
     
 
-    pub fn render(&mut self) -> Result<(), wgpu::SwapChainError> {
+    pub fn render(&mut self, gpu_object: &crate::camera::GPUObject<crate::camera::Uniforms>) -> Result<(), wgpu::SwapChainError> {
         let frame = self.swap_chain.get_current_frame()?.output;
 
         let mut encoder = self.device
@@ -221,9 +161,15 @@ impl State {
                 }),
             });
             
-            render_pass.set_pipeline(&self.render_pipeline); // 2.
-            render_pass.set_bind_group(0, &self.camera_gpu_object.bind_group, &[]);
-            render_pass.draw(0..3, 0..1); // 3.
+            match &self.render_pipeline{
+                Some(rp) => {
+                    render_pass.set_pipeline(&rp); // 2.
+                    render_pass.set_bind_group(0, &gpu_object.bind_group, &[]); //TODO, the gpu object should know what its bind group is.
+                    render_pass.draw(0..3, 0..1); // 3.
+                },
+                None => panic!("The Render pipeline was not initialized, please include init_pipleine"),
+            }
+            
 
         }
 
