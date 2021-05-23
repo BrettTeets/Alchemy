@@ -1,5 +1,5 @@
 use alchemy_framework as alchemy;
-use alchemy::app_window::AppWindow;
+use alchemy::graphics::app_window::Graphics;
 use winit::event::{Event, VirtualKeyCode};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit_input_helper::WinitInputHelper;
@@ -10,9 +10,9 @@ const HEIGHT: u32 = 800;
 
 fn main() {
     let event_loop = EventLoop::new();
-    let mut app_window: AppWindow = AppWindow::new(HEIGHT, WIDTH, &event_loop);
-    let mut example: Example = Example::new(&app_window);
-    app_window.init_graphics_device(&example.uniform_bind_group_layout);
+    let mut screen: Graphics = Graphics::new(HEIGHT, WIDTH, "one more step", &event_loop);
+    let mut example: Example = Example::new(&screen);
+    screen.init_graphics_device(&example.uniform_bind_group_layout);
     
 
     let mut input = WinitInputHelper::new();
@@ -24,7 +24,7 @@ fn main() {
         
         match event {
             //Event main events are cleared with request a redraw?
-            Event::MainEventsCleared => app_window.window.request_redraw(),
+            Event::MainEventsCleared => screen.window.request_redraw(),
             //I am not handling events or device Id here, 
             Event::DeviceEvent { ref event, ..} => {
                 //doubling up while we sort this code out.
@@ -34,17 +34,17 @@ fn main() {
             Event::WindowEvent {
                 ref event,
                 window_id,
-            } if window_id == app_window.window.id() => {
+            } if window_id == screen.window.id() => {
                 match event {
                     WindowEvent::CloseRequested => {
                         example.exit();
                         *control_flow = ControlFlow::Exit},
                     WindowEvent::Resized(physical_size) => {
-                        app_window.on_resize(*physical_size);
+                        screen.on_resize(*physical_size);
                         example.resize(*physical_size);
                     }
                     WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                        app_window.on_resize(**new_inner_size)
+                        screen.on_resize(**new_inner_size)
                     }
                     _ => {}
                 }
@@ -54,9 +54,9 @@ fn main() {
                 let now = std::time::Instant::now();
                 let delta_time = now - last_render_time;
                 last_render_time = now;
-                example.update(&mut app_window, delta_time);
+                example.update(&mut screen, delta_time);
 
-                app_window.on_draw(&example.camera_gpu_object, &mut control_flow);
+                screen.on_draw(&example.camera_gpu_object, &mut control_flow);
             }
             _ => {}
         }//End match statement.
@@ -72,7 +72,7 @@ struct Example{
 
 use winit::{ event::*};
 impl Example{
-    fn new(app: &AppWindow) -> Self{
+    fn new(app: &Graphics) -> Self{
         let uniform_bind_group_layout = app.state.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -109,7 +109,7 @@ impl Example{
         self.camera.resize(physical_size);
     }
     
-    fn update(&mut self, app: &mut AppWindow, dt: std::time::Duration){
+    fn update(&mut self, app: &mut Graphics, dt: std::time::Duration){
         self.camera.controller.update_camera(&mut self.camera.camera, dt);
         self.camera.update();
         app.state.write_buffer(&self.camera_gpu_object.buffer, self.camera.uniforms)
