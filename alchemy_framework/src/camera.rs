@@ -66,16 +66,23 @@ impl CameraObject{
 pub struct GPUObject<T>{
     pub buffer: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
+    pub layout: wgpu::BindGroupLayout,
+    pub binding: u32,
     _dummy: Option<T>, //originally I tried just using T in the impl block but the compiler want the object
     //to use T as well. So this is a bit of dummy code to appease the compiler. TODO: Remove this.
 }
 
 impl<T: bytemuck::Pod> GPUObject<T> {
-    pub fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniforms: T) -> Self{
+    pub fn new(device: &wgpu::Device, layout: wgpu::BindGroupLayout, uniforms: T, binding: u32, name: &str) -> Self{
+        let mut buffer_name = "Buffer-".to_owned();
+        buffer_name.push_str(name);
+        let mut bind_group_name = "BindGroup-".to_owned();
+        bind_group_name.push_str(name);
+        
         use wgpu::util::DeviceExt;
         let buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
-                label: Some("Buffer"),
+                label: Some(buffer_name.as_str()),
                 contents: bytemuck::cast_slice(&[uniforms]),
                 usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
             }
@@ -85,16 +92,18 @@ impl<T: bytemuck::Pod> GPUObject<T> {
             layout: &layout,
             entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 0,
+                    binding: binding,
                     resource: buffer.as_entire_binding(),
                 }
             ],
-            label: Some("bind_group"),
+            label: Some(bind_group_name.as_str()),
         });
 
         Self{
             buffer,
             bind_group,
+            layout,
+            binding,
             _dummy: None,
         }
     }

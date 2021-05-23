@@ -1,8 +1,13 @@
+use crate::camera::GPUObject;
 use crate::texture;
 use std::iter;
 use winit::window::Window;
 #[allow(unused_imports)]
 use log::{error, warn, info, debug, trace};
+
+const RENDERFORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
+const SCUSAGE: wgpu::TextureUsage = wgpu::TextureUsage::RENDER_ATTACHMENT;
+const SCPRESENT: wgpu::PresentMode = wgpu::PresentMode::Fifo;
 
 pub struct State {
     surface: wgpu::Surface,
@@ -27,21 +32,14 @@ impl State {
 
         let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
-                label: None,
+                label: Some("Named Device"),
                 features: wgpu::Features::empty(),
                 limits: wgpu::Limits::default(),
             },
             None, // Trace path
         ).await.unwrap();
 
-        let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        let sc_desc = wgpu::SwapChainDescriptor {
-            usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
-            format: render_format,
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
-        };
+        let sc_desc = wgpu::SwapChainDescriptor { usage: SCUSAGE, format: RENDERFORMAT, width: size.width, height: size.height, present_mode: SCPRESENT};
 
         let swap_chain = device.create_swap_chain(&surface, &sc_desc);
         let depth_texture = texture::Texture::create_depth_texture(&device, &sc_desc, "depth_texture");
@@ -58,25 +56,21 @@ impl State {
         }
     }
 
-    pub fn init_pipeline(&mut self, bind_group_layout: &wgpu::BindGroupLayout){
-        let vs_module = self.device.create_shader_module(&wgpu::include_spirv!("shader.vert.spv"));
-        let fs_module = self.device.create_shader_module(&wgpu::include_spirv!("shader.frag.spv"));
-        let render_pipeline_layout =
-        self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let render_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    pub fn init_pipeline(&mut self, render_pipeline_layout: wgpu::PipelineLayout, 
+    vert: wgpu::ShaderModuleDescriptor, frag: wgpu::ShaderModuleDescriptor){ 
+        //Fairly condensed render pipeline creation, some things to note its inside of a Option enum and 
+        //placed directly into the state's render field. The vs and fs modules rare created right where 
+        //they are used.
+        self.render_pipeline = Some(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &vs_module,
+                module: &self.device.create_shader_module(&vert),
                 entry_point: "main", // 1.
                 buffers: &[], // 2.
             },
             fragment: Some(wgpu::FragmentState { // 3.
-                module: &fs_module,
+                module: &self.device.create_shader_module(&frag),
                 entry_point: "main",
                 targets: &[wgpu::ColorTargetState { // 4.
                     format: self.sc_desc.format,
@@ -107,9 +101,7 @@ impl State {
                 mask: !0, // 3.
                 alpha_to_coverage_enabled: false, // 4.
             },
-        });
-
-        self.render_pipeline = Some(render_pipeline);
+        }));
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -172,5 +164,77 @@ impl State {
         self.queue.submit(iter::once(encoder.finish()));
 
         Ok(())
+    }
+}
+
+pub struct BasicEffect<T> {
+    pub render_pipeline: wgpu::RenderPipeline,
+    pub camera_obj: GPUObject<T>,
+}
+
+impl<T> BasicEffect<T> {
+    pub fn new(gpu: State, camera_obj: GPUObject<T>) -> Self{
+        let vs_module = gpu.device.create_shader_module(&wgpu::include_spirv!("shader.vert.spv"));
+        let fs_module = gpu.device.create_shader_module(&wgpu::include_spirv!("shader.frag.spv"));
+
+        let render_pipeline_layout =
+        gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[&camera_obj.layout],
+            push_constant_ranges: &[],
+        });
+
+        let render_pipeline = gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &vs_module,
+                entry_point: "main", // 1.
+                buffers: &[], // 2.
+            },
+            fragment: Some(wgpu::FragmentState { // 3.
+                module: &fs_module,
+                entry_point: "main",
+                targets: &[wgpu::ColorTargetState { // 4.
+                    format: gpu.sc_desc.format,
+                    alpha_blend: wgpu::BlendState::REPLACE,
+                    color_blend: wgpu::BlendState::REPLACE,
+                    write_mask: wgpu::ColorWrite::ALL,
+                }],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw, // 2.
+                cull_mode: wgpu::CullMode::Back,
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less, // 1.
+                stencil: wgpu::StencilState::default(), // 2.
+                bias: wgpu::DepthBiasState::default(),
+                // Setting this to true requires Features::DEPTH_CLAMPING
+                clamp_depth: false,
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1, // 2.
+                mask: !0, // 3.
+                alpha_to_coverage_enabled: false, // 4.
+            },
+        });
+        
+        return Self{
+            render_pipeline,
+            camera_obj
+        }
+    }
+
+    pub fn render<'a>(&'a mut self, render_pass: &mut wgpu::RenderPass<'a>){
+        render_pass.set_pipeline(&self.render_pipeline); // 2.
+        render_pass.set_bind_group(self.camera_obj.binding, &self.camera_obj.bind_group, &[]); //TODO, the gpu object should know what its bind group is.
+        render_pass.draw(0..3, 0..1); // 3.
     }
 }

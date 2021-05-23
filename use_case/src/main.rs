@@ -49,7 +49,17 @@ impl alchemy::graphics::App for GameEngine{
     }
 
     fn on_load(&self, app: &mut alchemy::graphics::AppWindow) { 
-        app.gpu.init_pipeline(&self.uniform_bind_group_layout);
+        let vert = wgpu::include_spirv!("shader.vert.spv");
+        let frag = wgpu::include_spirv!("shader.frag.spv");
+
+        let render_pipeline_layout =
+        app.gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[&self.uniform_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        app.gpu.init_pipeline(render_pipeline_layout, vert, frag);
     }
 
 
