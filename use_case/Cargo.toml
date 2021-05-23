@@ -11,3 +11,4 @@ alchemy_framework = { path = "../alchemy_framework" }
 log = "0.4"
 simplelog = "0.10.0"
 winit = "0.24.0"
+wgpu = "0.7"

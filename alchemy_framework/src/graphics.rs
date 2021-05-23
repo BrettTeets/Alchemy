@@ -126,7 +126,6 @@ impl State {
     pub fn write_buffer(&mut self, buffer: &wgpu::Buffer, bytes: impl bytemuck::Pod ){
         self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&[bytes]));
     }
-    
 
     pub fn render(&mut self, gpu_object: &crate::camera::GPUObject<crate::camera::Uniforms>) -> Result<(), wgpu::SwapChainError> {
         let frame = self.swap_chain.get_current_frame()?.output;
@@ -167,7 +166,7 @@ impl State {
                     render_pass.set_bind_group(0, &gpu_object.bind_group, &[]); //TODO, the gpu object should know what its bind group is.
                     render_pass.draw(0..3, 0..1); // 3.
                 },
-                None => panic!("The Render pipeline was not initialized, please include init_pipleine"),
+                None => panic!("The Render pipeline was not initialized, please include init_pipleine somehwere in the code"),
             }
             
 

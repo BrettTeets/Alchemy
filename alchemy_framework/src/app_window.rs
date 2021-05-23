@@ -8,20 +8,30 @@ use futures;
 
 use crate::graphics;
 
+///this is a function that takes no parameters and returns nothing, that can be used to get around
+///rust limits on inherientance that I would normally use to build app window. Basically you pass
+/// operation you want to happen on certain events here sort of like an observer/subscriber pattern. 
+/// I might turn this into that in the future.
+pub type CallOut = Box<dyn Fn() -> ()>;
+pub type TimedCallOut = Box<dyn Fn(std::time::Duration) -> ()>;
+pub type EventCallOut = Box<dyn Fn(&DeviceEvent) -> ()>;
+
 pub struct AppWindow{
-    width: u32,
-    height: u32,
-    state: graphics::State,
-    window: winit::window::Window,
+    pub state: graphics::State,
+    pub window: winit::window::Window,
     //For now this can live here.
     camera: crate::camera::CameraObject,
     camera_gpu_object: crate::camera::GPUObject<crate::camera::Uniforms>,
     mouse_pressed: bool,
+
+    exit_call: Option<CallOut>,
+    resize_call: Option<CallOut>,
+    update_call: Option<TimedCallOut>,
+    input_call: Option<EventCallOut>,
 }
 
 impl AppWindow{
     pub fn new(width: u32, height: u32, event_loop: &EventLoop<()>) -> Self{
-        
         let window = {
             let size = LogicalSize::new(width as f64, height as f64);
             WindowBuilder::new()
@@ -64,18 +74,37 @@ impl AppWindow{
         state.init_pipeline(&uniform_bind_group_layout);
 
         return Self{
-            width,
-            height,
             state,
             window,
             camera,
             camera_gpu_object,
             mouse_pressed: false,
+            exit_call: None,
+            resize_call: None,
+            update_call: None,
+            input_call: None,
         }
     }
 
-    pub fn run(event_loop: EventLoop<()>, mut app: Self) -> !
+    pub fn set_call_backs(&mut self, exit_call: CallOut, resize_call: CallOut,
+    update_call: TimedCallOut){
+        self.exit_call = Some(exit_call);
+        self.resize_call = Some(resize_call);
+        self.update_call = Some(update_call);
+        //self.input_call = Some(input_call);
+    }
+
+    pub fn init_graphics_device(&mut self, bind_group_layout: &wgpu::BindGroupLayout){
+        self.state.init_pipeline(&bind_group_layout);
+    }
+
+    pub fn run(event_loop: EventLoop<()>, mut app: Self, game: impl CallBack + 'static ) -> !
     {
+        let exit = || game.exit();
+        let resize = || game.resize();
+        let update = |dt| game.update(dt);
+        let update = |event| game.input(event);
+       
         let mut input = WinitInputHelper::new();
         let mut last_render_time = std::time::Instant::now();
 
@@ -100,7 +129,7 @@ impl AppWindow{
                 } if window_id == app.window.id() => {
                     match event {
                         WindowEvent::CloseRequested => {
-                            app.on_exit();
+                            app.on_exit(Box::new(exit));
                             *control_flow = ControlFlow::Exit},
                         WindowEvent::Resized(physical_size) => {
                             app.on_resize(*physical_size)
@@ -137,8 +166,11 @@ impl AppWindow{
         }
     }
 
-    fn on_input(&mut self, event: &DeviceEvent, input: &winit_input_helper::WinitInputHelper) -> bool{
-        match event {
+    fn on_input(&mut self, event: &DeviceEvent, input: &winit_input_helper::WinitInputHelper){
+        
+        &(self.input_call.as_ref().unwrap())(event);
+        
+        /*match event {
             DeviceEvent::Key(
                 KeyboardInput {
                     virtual_keycode: Some(key),
@@ -164,21 +196,33 @@ impl AppWindow{
                 true
             }
             _ => false,
-        }
+        }*/
     }
 
-    fn on_exit(&self){
-
+    fn on_exit(&self, call: CallOut){
+        call();
     }
 
     pub fn on_resize(&mut self, physical_size: winit::dpi::PhysicalSize<u32>){
         self.state.resize(physical_size);
-        self.camera.resize(physical_size);
+        &(self.resize_call.as_ref().unwrap())();
+        //self.camera.resize(physical_size);
     }
 
     pub fn on_update(&mut self, time: std::time::Duration){
-        self.camera.controller.update_camera(&mut self.camera.camera, time);
-        self.camera.update();
-        self.state.write_buffer(&self.camera_gpu_object.buffer, self.camera.uniforms)
+        //self.camera.controller.update_camera(&mut self.camera.camera, time);
+        //self.camera.update();
+        //self.state.write_buffer(&self.camera_gpu_object.buffer, self.camera.uniforms)
+        &(self.update_call.as_ref().unwrap())(time);
     }
+}
+
+pub trait CallBack {
+     fn exit(&self);
+    
+     fn resize(&self);
+    
+     fn update(&self, dt: std::time::Duration);
+    
+     fn input(&self, event: &DeviceEvent);
 }
