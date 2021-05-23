@@ -1,179 +1,152 @@
-use crate::texture;
-use std::iter;
-use winit::window::Window;
-#[allow(unused_imports)]
-use log::{error, warn, info, debug, trace};
-use winit::{
-    event::*,
-};
+use winit::event::{Event, VirtualKeyCode};
+use winit::event_loop::{ControlFlow, EventLoop};
+use winit_input_helper::WinitInputHelper;
+use winit::{ event::*};
+use crate::gpu;
 
-pub struct State {
-    surface: wgpu::Surface,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
-    pub sc_desc: wgpu::SwapChainDescriptor,
-    swap_chain: wgpu::SwapChain,
-    pub size: winit::dpi::PhysicalSize<u32>,
-    depth_texture: texture::Texture,
-    render_pipeline: Option<wgpu::RenderPipeline>, //This is initialized later.
+pub trait App {
+    fn new(gpu: &gpu::State) -> Self;
+
+    fn run(window_config: WindowConfig) -> Result<(), ()>
+    where
+        Self: 'static + Sized,
+    {
+        return <Default as Go<Self>>::run(window_config);
+    }
+
+    fn on_load(&self, app: &mut AppWindow,);
+
+    fn on_update(&mut self, app: &mut AppWindow, delta: std::time::Duration);
+
+    fn on_draw(&self, app: &mut AppWindow, control_flow: &mut winit::event_loop::ControlFlow);
+
+    fn on_input(&mut self, inputs: &winit::event::DeviceEvent);
+
+    fn on_resize(&mut self, physical_size: winit::dpi::PhysicalSize<u32>);
+
+    fn on_exit(&self);
+    
 }
 
-impl State {
-    pub async fn new(window: &Window) -> Self {
-        let size = window.inner_size();
-        let instance = wgpu::Instance::new(wgpu::BackendBit::VULKAN);
-        let surface = unsafe { instance.create_surface(window) };
-        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
-        }).await.unwrap();
+pub struct Default {}
 
-        let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                features: wgpu::Features::empty(),
-                limits: wgpu::Limits::default(),
-            },
-            None, // Trace path
-        ).await.unwrap();
+impl<A: App> Go<A> for Default
+where
+    A: 'static,
+{
+    fn new(
+        game: &mut A,
+        window: &AppWindow,
+    ) -> Self{
+        return Self {};
+    }
+}
 
-        let render_format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        let sc_desc = wgpu::SwapChainDescriptor {
-            usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
-            format: render_format,
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+pub trait Go<A: App>{
+    fn new(
+        app: &mut A,
+        window: &AppWindow,
+    ) -> Self;
+
+    fn run(window_config: WindowConfig) -> Result<(), ()>
+    where
+    Self: 'static + Sized,
+    A: 'static,
+    {
+        let event_loop = EventLoop::new();
+        let mut window = window_config.make_window(&event_loop);
+        let mut app = App::new(&window.gpu);
+        let mut game_loop = Self::new(&mut app, &mut window); //If you take this out app requires type annotation, since I might 
+        //need to add in some underlying functionality in the future that will go here no point in refactoring to fix that.
+
+        app.on_load(&mut window);
+
+        let mut input = WinitInputHelper::new();
+        let mut last_render_time = std::time::Instant::now();
+    
+        event_loop.run(move |event, _, mut control_flow| {
+            input.update(&event);
+            if input.key_pressed(VirtualKeyCode::Escape) {*control_flow = ControlFlow::Exit;}
+            
+            match event {
+                //Event main events are cleared with request a redraw?
+                Event::MainEventsCleared => window.window.request_redraw(),
+                Event::DeviceEvent { event, ..} => {
+                    app.on_input(&event);
+                }
+                //Handle window specific events and other things winit picks up I guess.
+                Event::WindowEvent {
+                    ref event,
+                    window_id,
+                } if window_id == window.window.id() => {
+                    match event {
+                        WindowEvent::CloseRequested => {
+                            app.on_exit();
+                            *control_flow = ControlFlow::Exit},
+                        WindowEvent::Resized(physical_size) => {
+                            app.on_resize(*physical_size);
+                            window.gpu.resize(*physical_size);
+                        }
+                        WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                            app.on_resize(**new_inner_size);
+                            window.gpu.resize(**new_inner_size);
+                        }
+                        _ => {}
+                    }
+                }
+                //I am unsure about the ordering of this, when is this happening in the course of the program?
+                Event::RedrawRequested(_) => {
+                    let now = std::time::Instant::now();
+                    let delta_time = now - last_render_time;
+                    last_render_time = now;
+                    app.on_update(&mut window, delta_time);
+                    app.on_draw(&mut window, &mut control_flow);
+                }
+                _ => {}
+            }//End match statement.
+        });//End Run Loop.
+    }//end Run Function
+}
+
+pub struct AppWindow{
+    pub gpu: gpu::State,
+    pub window: winit::window::Window,
+}
+
+pub struct WindowConfig{
+    pub width: f64,
+    pub height: f64,
+    pub title: String,
+}
+
+impl WindowConfig{
+    pub fn new(width: f64, height: f64, title: String) -> Self{
+        Self{
+            width,
+            height,
+            title,
+        }
+    }
+
+    pub fn make_window(&self, event_loop: &EventLoop<()>) -> AppWindow {
+        let window = {
+            use winit::window::WindowBuilder;
+            use winit::dpi::LogicalSize;
+            let size = LogicalSize::new(self.width, self.height);
+            WindowBuilder::new()
+                .with_title(self.title.as_str())
+                .with_inner_size(size)
+                .with_min_inner_size(size)
+                .build(&event_loop)
+                .unwrap()
         };
 
-        let swap_chain = device.create_swap_chain(&surface, &sc_desc);
-        let depth_texture = texture::Texture::create_depth_texture(&device, &sc_desc, "depth_texture");
-
-        Self {
-            surface,
-            device,
-            queue,
-            sc_desc,
-            swap_chain,
-            size,
-            depth_texture,
-            render_pipeline: None,
+        use futures::executor::block_on;
+        let gpu = block_on(gpu::State::new(&window));
+        
+        return AppWindow{
+            gpu,
+            window,
         }
-    }
-
-    pub fn init_pipeline(&mut self, bind_group_layout: &wgpu::BindGroupLayout){
-        let vs_module = self.device.create_shader_module(&wgpu::include_spirv!("shader.vert.spv"));
-        let fs_module = self.device.create_shader_module(&wgpu::include_spirv!("shader.frag.spv"));
-        let render_pipeline_layout =
-        self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let render_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &vs_module,
-                entry_point: "main", // 1.
-                buffers: &[], // 2.
-            },
-            fragment: Some(wgpu::FragmentState { // 3.
-                module: &fs_module,
-                entry_point: "main",
-                targets: &[wgpu::ColorTargetState { // 4.
-                    format: self.sc_desc.format,
-                    alpha_blend: wgpu::BlendState::REPLACE,
-                    color_blend: wgpu::BlendState::REPLACE,
-                    write_mask: wgpu::ColorWrite::ALL,
-                }],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw, // 2.
-                cull_mode: wgpu::CullMode::Back,
-                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                polygon_mode: wgpu::PolygonMode::Fill,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: texture::Texture::DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less, // 1.
-                stencil: wgpu::StencilState::default(), // 2.
-                bias: wgpu::DepthBiasState::default(),
-                // Setting this to true requires Features::DEPTH_CLAMPING
-                clamp_depth: false,
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1, // 2.
-                mask: !0, // 3.
-                alpha_to_coverage_enabled: false, // 4.
-            },
-        });
-
-        self.render_pipeline = Some(render_pipeline);
-    }
-
-    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        self.size = new_size;
-        self.sc_desc.width = new_size.width;
-        self.sc_desc.height = new_size.height;
-        self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
-        self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.sc_desc, "depth_texture");
-    }
-
-    pub fn write_buffer(&mut self, buffer: &wgpu::Buffer, bytes: impl bytemuck::Pod ){
-        self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&[bytes]));
-    }
-
-    pub fn render(&mut self, gpu_object: &crate::camera::GPUObject<crate::camera::Uniforms>) -> Result<(), wgpu::SwapChainError> {
-        let frame = self.swap_chain.get_current_frame()?.output;
-
-        let mut encoder = self.device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder"),});
-
-        {
-            let mut render_pass = encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &frame.view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
-                        store: true,
-                    },
-                }],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachmentDescriptor {
-                    attachment: &self.depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: true,
-                    }),
-                    stencil_ops: None,
-                }),
-            });
-            
-            match &self.render_pipeline{
-                Some(rp) => {
-                    render_pass.set_pipeline(&rp); // 2.
-                    render_pass.set_bind_group(0, &gpu_object.bind_group, &[]); //TODO, the gpu object should know what its bind group is.
-                    render_pass.draw(0..3, 0..1); // 3.
-                },
-                None => panic!("The Render pipeline was not initialized, please include init_pipleine somehwere in the code"),
-            }
-            
-
-        }
-
-        self.queue.submit(iter::once(encoder.finish()));
-
-        Ok(())
     }
 }
