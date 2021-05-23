@@ -3,9 +3,6 @@ use std::iter;
 use winit::window::Window;
 #[allow(unused_imports)]
 use log::{error, warn, info, debug, trace};
-use winit::{
-    event::*,
-};
 
 pub struct State {
     surface: wgpu::Surface,

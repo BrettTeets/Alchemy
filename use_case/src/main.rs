@@ -1,79 +1,26 @@
 use alchemy_framework as alchemy;
-use alchemy::graphics::app_window::Graphics;
-use winit::event::{Event, VirtualKeyCode};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit_input_helper::WinitInputHelper;
-use winit::{ event::*};
+use winit::{
+    event::*,
+    event_loop::{ControlFlow},
+};
 
-const WIDTH: u32 = 320;
-const HEIGHT: u32 = 800;
 
 fn main() {
-    let event_loop = EventLoop::new();
-    let mut screen: Graphics = Graphics::new(HEIGHT, WIDTH, "one more step", &event_loop);
-    let mut example: Example = Example::new(&screen);
-    screen.init_graphics_device(&example.uniform_bind_group_layout);
-    
-
-    let mut input = WinitInputHelper::new();
-    let mut last_render_time = std::time::Instant::now();
-
-    event_loop.run(move |event, _, mut control_flow| {
-        input.update(&event);
-        if input.key_pressed(VirtualKeyCode::Escape) {*control_flow = ControlFlow::Exit;}
-        
-        match event {
-            //Event main events are cleared with request a redraw?
-            Event::MainEventsCleared => screen.window.request_redraw(),
-            //I am not handling events or device Id here, 
-            Event::DeviceEvent { ref event, ..} => {
-                //doubling up while we sort this code out.
-                example.input(event, &input);
-            }
-            //Handle window specific events and other things winit picks up I guess.
-            Event::WindowEvent {
-                ref event,
-                window_id,
-            } if window_id == screen.window.id() => {
-                match event {
-                    WindowEvent::CloseRequested => {
-                        example.exit();
-                        *control_flow = ControlFlow::Exit},
-                    WindowEvent::Resized(physical_size) => {
-                        screen.on_resize(*physical_size);
-                        example.resize(*physical_size);
-                    }
-                    WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                        screen.on_resize(**new_inner_size)
-                    }
-                    _ => {}
-                }
-            }
-            //I am unsure about the ordering of this, when is this happening in the course of the program?
-            Event::RedrawRequested(_) => {
-                let now = std::time::Instant::now();
-                let delta_time = now - last_render_time;
-                last_render_time = now;
-                example.update(&mut screen, delta_time);
-
-                screen.on_draw(&example.camera_gpu_object, &mut control_flow);
-            }
-            _ => {}
-        }//End match statement.
-    });//End Run Loop.
+    let config = alchemy::graphics::WindowConfig::new(800.0, 800.0, "Hello Wolrd".to_string());
+    <GameEngine as alchemy::graphics::App>::run(config).expect("something went wrong");
 }
 
-struct Example{
+pub struct GameEngine{
     camera: alchemy_framework::camera::CameraObject,
-    camera_gpu_object: alchemy_framework::camera::GPUObject<alchemy_framework::camera::Uniforms>,
-    uniform_bind_group_layout: wgpu::BindGroupLayout,
+    pub camera_gpu_object: alchemy_framework::camera::GPUObject<alchemy_framework::camera::Uniforms>,
+    pub uniform_bind_group_layout: wgpu::BindGroupLayout,
     mouse_pressed: bool,
 }
 
-use winit::{ event::*};
-impl Example{
-    fn new(app: &Graphics) -> Self{
-        let uniform_bind_group_layout = app.state.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+impl alchemy::graphics::App for GameEngine{
+    
+    fn new(gpu: &alchemy::gpu::State) -> Self { 
+        let uniform_bind_group_layout = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -89,9 +36,9 @@ impl Example{
             label: Some("uniform_bind_group_layout"),
         });
 
-        let mut camera = alchemy_framework::camera::CameraObject::new(&app.state.sc_desc);
+        let mut camera = alchemy_framework::camera::CameraObject::new(&gpu.sc_desc);
         camera.update();
-        let camera_gpu_object = alchemy_framework::camera::GPUObject::new(&app.state.device, &uniform_bind_group_layout, camera.uniforms);
+        let camera_gpu_object = alchemy_framework::camera::GPUObject::new(&gpu.device, &uniform_bind_group_layout, camera.uniforms);
 
         Self{
             camera,
@@ -101,30 +48,36 @@ impl Example{
         }
     }
 
-    fn exit(&self){
-        
+    fn on_load(&self, app: &mut alchemy::graphics::AppWindow) { 
+        app.gpu.init_pipeline(&self.uniform_bind_group_layout);
     }
-    
-     fn resize(&mut self, physical_size: winit::dpi::PhysicalSize<u32>){
-        self.camera.resize(physical_size);
-    }
-    
-    fn update(&mut self, app: &mut Graphics, dt: std::time::Duration){
-        self.camera.controller.update_camera(&mut self.camera.camera, dt);
+
+
+    fn on_update(&mut self, app: &mut alchemy::graphics::AppWindow, delta: std::time::Duration) { 
+        self.camera.controller.update_camera(&mut self.camera.camera, delta);
         self.camera.update();
-        app.state.write_buffer(&self.camera_gpu_object.buffer, self.camera.uniforms)
+        app.gpu.write_buffer(&self.camera_gpu_object.buffer, self.camera.uniforms)
     }
-    
-    
-     fn input(&mut self, event: &DeviceEvent, helper: &winit_input_helper::WinitInputHelper) -> bool{
-        match event {
-            DeviceEvent::Key(
-                KeyboardInput {
-                    virtual_keycode: Some(key),
-                    state,
-                    ..
-                }
-            ) => self.camera.controller.process_keyboard(*key, *state),
+
+    fn on_draw(&self, app: &mut alchemy::graphics::AppWindow, control_flow: &mut winit::event_loop::ControlFlow) { 
+        match app.gpu.render(&self.camera_gpu_object)  {
+            Ok(_) => {}
+            // Recreate the swap_chain if lost
+            Err(wgpu::SwapChainError::Lost) => app.gpu.resize(app.gpu.size),
+            // The system is out of memory, we should probably quit
+            Err(wgpu::SwapChainError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+            // All other errors (Outdated, Timeout) should be resolved by the next frame
+            Err(e) => eprintln!("{:?}", e),
+        }
+    }
+
+    fn on_input(&mut self, event: &winit::event::DeviceEvent) {      
+        let _ = match event {
+            DeviceEvent::Key(KeyboardInput {
+                virtual_keycode: Some(key),
+                state,
+                ..
+            }) => self.camera.controller.process_keyboard(*key, *state),
             DeviceEvent::MouseWheel { delta, .. } => {
                 self.camera.controller.process_scroll(delta);
                 true
@@ -143,9 +96,22 @@ impl Example{
                 true
             }
             _ => false,
-        }
+        };
+    }
+
+    fn on_resize(&mut self, physical_size: winit::dpi::PhysicalSize<u32>) 
+    { 
+        self.camera.resize(physical_size);
+    }
+
+    fn on_exit(&self) { 
+        //todo!() 
     }
 }
+
+
+
+
 
 
 

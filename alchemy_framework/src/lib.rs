@@ -1,6 +1,7 @@
 pub mod graphics;
 pub mod texture;
 pub mod camera;
+pub mod gpu;
 
 
 #[cfg(test)]
