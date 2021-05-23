@@ -5,7 +5,7 @@ use winit::dpi::PhysicalPosition;
 use winit::event::*;
 
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub struct Uniforms {
     view_position: [f32; 4],
     view_proj: [[f32; 4]; 4],
@@ -33,6 +33,72 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
     0.0, 0.0, 0.5, 0.0,
     0.0, 0.0, 0.5, 1.0,
 );
+
+pub struct CameraObject{
+    pub camera: Camera,
+    pub projection: Projection,
+    pub controller: CameraController,
+    pub uniforms: Uniforms,
+}
+
+impl CameraObject{
+    pub fn new(sc_desc: &wgpu::SwapChainDescriptor) -> Self{
+        let projection = crate::camera::Projection::new(sc_desc.width, sc_desc.height, cgmath::Deg(45.0), 0.001, 100.0);
+        let controller = crate::camera::CameraController::new(4.0, 0.4);
+        let camera = crate::camera::Camera::new((0.0, 5.0, 10.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));      
+        Self {
+            camera,
+            projection,
+            controller,
+            uniforms: Uniforms::new(),
+        }
+    }
+
+    pub fn update(&mut self){
+        self.uniforms.update_view_proj(&self.camera, &self.projection); 
+    }
+
+    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>){
+        self.projection.resize(new_size.width, new_size.height);
+    }
+}
+
+pub struct GPUObject<T>{
+    pub buffer: wgpu::Buffer,
+    pub bind_group: wgpu::BindGroup,
+    _dummy: Option<T>, //originally I tried just using T in the impl block but the compiler want the object
+    //to use T as well. So this is a bit of dummy code to appease the compiler. TODO: Remove this.
+}
+
+impl<T: bytemuck::Pod> GPUObject<T> {
+    pub fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, uniforms: T) -> Self{
+        use wgpu::util::DeviceExt;
+        let buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Buffer"),
+                contents: bytemuck::cast_slice(&[uniforms]),
+                usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+            }
+        );
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("bind_group"),
+        });
+
+        Self{
+            buffer,
+            bind_group,
+            _dummy: None,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Camera {
@@ -63,6 +129,7 @@ impl Camera {
     }
 }
 
+#[derive(Debug)]
 pub struct Projection {
     aspect: f32,
     fovy: Rad<f32>,

@@ -5,8 +5,6 @@ use winit::window::Window;
 use log::{error, warn, info, debug, trace};
 use winit::{
     event::*,
-    event_loop::{ControlFlow, EventLoop},
-    window::{WindowBuilder},
 };
 
 pub struct State {
@@ -19,12 +17,8 @@ pub struct State {
     depth_texture: texture::Texture,
     render_pipeline: wgpu::RenderPipeline,
     //Should move this out of here.
-    camera: crate::camera::Camera, // UPDATED!
-    projection: crate::camera::Projection, // NEW!
-    camera_controller: crate::camera::CameraController, // UPDATED!
-    uniforms: crate::camera::Uniforms,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
+    camera: crate::camera::CameraObject, // UPDATED!
+    camera_gpu_object: crate::camera::GPUObject<crate::camera::Uniforms>,
     mouse_pressed: bool,
 }
 
@@ -60,20 +54,6 @@ impl State {
         let depth_texture = texture::Texture::create_depth_texture(&device, &sc_desc, "depth_texture");
 
         //NEW CAMERA CODE
-        let camera = crate::camera::Camera::new((0.0, 5.0, 10.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));
-        let projection = crate::camera::Projection::new(sc_desc.width, sc_desc.height, cgmath::Deg(45.0), 0.001, 100.0);
-        let camera_controller = crate::camera::CameraController::new(4.0, 0.4);
-
-        let mut uniforms = crate::camera::Uniforms::new();
-        uniforms.update_view_proj(&camera, &projection); 
-        use wgpu::util::DeviceExt;
-        let uniform_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[uniforms]),
-                usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
-            }
-        );
         let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -88,17 +68,11 @@ impl State {
                 }
             ],
             label: Some("uniform_bind_group_layout"),
-        });        
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &uniform_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                }
-            ],
-            label: Some("uniform_bind_group"),
         });
+
+        let mut camera = crate::camera::CameraObject::new(&sc_desc);
+        camera.update();
+        let camera_gpu_object = crate::camera::GPUObject::new(&device, &uniform_bind_group_layout, camera.uniforms);
         //END CAMERA CODE
 
         let vs_module = device.create_shader_module(&wgpu::include_spirv!("shader.vert.spv"));
@@ -151,10 +125,6 @@ impl State {
             },
         });
 
-        
-        
-        
-
         Self {
             surface,
             device,
@@ -165,13 +135,8 @@ impl State {
             depth_texture,
             render_pipeline,
             camera,
-            projection, 
-            camera_controller,
-            uniforms,
-            uniform_buffer,
-            uniform_bind_group,
+            camera_gpu_object,
             mouse_pressed: false,
-            
         }
     }
 
@@ -181,7 +146,7 @@ impl State {
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
         
-        self.projection.resize(new_size.width, new_size.height);
+        self.camera.resize(new_size);
         
         self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.sc_desc, "depth_texture");
     }
@@ -194,9 +159,9 @@ impl State {
                     state,
                     ..
                 }
-            ) => self.camera_controller.process_keyboard(*key, *state),
+            ) => self.camera.controller.process_keyboard(*key, *state),
             DeviceEvent::MouseWheel { delta, .. } => {
-                self.camera_controller.process_scroll(delta);
+                self.camera.controller.process_scroll(delta);
                 true
             }
             DeviceEvent::Button {
@@ -208,7 +173,7 @@ impl State {
             }
             DeviceEvent::MouseMotion { delta } => {
                 if self.mouse_pressed {
-                    self.camera_controller.process_mouse(delta.0, delta.1);
+                    self.camera.controller.process_mouse(delta.0, delta.1);
                 }
                 true
             }
@@ -217,11 +182,10 @@ impl State {
     }
 
     pub fn update(&mut self, dt: std::time::Duration) {
-        self.camera_controller.update_camera(&mut self.camera, dt);
-        self.uniforms.update_view_proj(&self.camera, &self.projection);
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[self.uniforms]));
+        self.camera.controller.update_camera(&mut self.camera.camera, dt);
+        self.camera.uniforms.update_view_proj(&self.camera.camera, &self.camera.projection);
+        self.queue.write_buffer(&self.camera_gpu_object.buffer, 0, bytemuck::cast_slice(&[self.camera.uniforms]));
     }
-    
     
 
     pub fn render(&mut self) -> Result<(), wgpu::SwapChainError> {
@@ -258,7 +222,7 @@ impl State {
             });
             
             render_pass.set_pipeline(&self.render_pipeline); // 2.
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.camera_gpu_object.bind_group, &[]);
             render_pass.draw(0..3, 0..1); // 3.
 
         }
