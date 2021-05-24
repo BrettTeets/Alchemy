@@ -14,7 +14,7 @@ pub trait App {
         return <Default as Go<Self>>::run(window_config);
     }
 
-    fn on_load(&self, app: &mut AppWindow,);
+    fn on_load(&mut self, app: &mut AppWindow,);
 
     fn on_update(&mut self, app: &mut AppWindow, delta: std::time::Duration);
 
@@ -35,8 +35,8 @@ where
     A: 'static,
 {
     fn new(
-        game: &mut A,
-        window: &AppWindow,
+        _game: &mut A,
+        _window: &AppWindow,
     ) -> Self{
         return Self {};
     }
@@ -56,7 +56,7 @@ pub trait Go<A: App>{
         let event_loop = EventLoop::new();
         let mut window = window_config.make_window(&event_loop);
         let mut app = App::new(&window.gpu);
-        let mut game_loop = Self::new(&mut app, &mut window); //If you take this out app requires type annotation, since I might 
+        let _game_loop = Self::new(&mut app, &mut window); //If you take this out app requires type annotation, since I might 
         //need to add in some underlying functionality in the future that will go here no point in refactoring to fix that.
 
         app.on_load(&mut window);

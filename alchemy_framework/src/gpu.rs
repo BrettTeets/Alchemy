@@ -17,7 +17,7 @@ pub struct State {
     swap_chain: wgpu::SwapChain,
     pub size: winit::dpi::PhysicalSize<u32>,
     depth_texture: texture::Texture,
-    render_pipeline: Option<wgpu::RenderPipeline>, //This is initialized later.
+    effect: Option<BasicEffect>, //This is initialized later.
 }
 
 impl State {
@@ -52,56 +52,16 @@ impl State {
             swap_chain,
             size,
             depth_texture,
-            render_pipeline: None,
+            effect: None,
         }
     }
 
-    pub fn init_pipeline(&mut self, render_pipeline_layout: wgpu::PipelineLayout, 
-    vert: wgpu::ShaderModuleDescriptor, frag: wgpu::ShaderModuleDescriptor){ 
-        //Fairly condensed render pipeline creation, some things to note its inside of a Option enum and 
-        //placed directly into the state's render field. The vs and fs modules rare created right where 
-        //they are used.
-        self.render_pipeline = Some(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &self.device.create_shader_module(&vert),
-                entry_point: "main", // 1.
-                buffers: &[], // 2.
-            },
-            fragment: Some(wgpu::FragmentState { // 3.
-                module: &self.device.create_shader_module(&frag),
-                entry_point: "main",
-                targets: &[wgpu::ColorTargetState { // 4.
-                    format: self.sc_desc.format,
-                    alpha_blend: wgpu::BlendState::REPLACE,
-                    color_blend: wgpu::BlendState::REPLACE,
-                    write_mask: wgpu::ColorWrite::ALL,
-                }],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw, // 2.
-                cull_mode: wgpu::CullMode::Back,
-                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                polygon_mode: wgpu::PolygonMode::Fill,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: texture::Texture::DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less, // 1.
-                stencil: wgpu::StencilState::default(), // 2.
-                bias: wgpu::DepthBiasState::default(),
-                // Setting this to true requires Features::DEPTH_CLAMPING
-                clamp_depth: false,
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1, // 2.
-                mask: !0, // 3.
-                alpha_to_coverage_enabled: false, // 4.
-            },
-        }));
+    pub fn add_effect(&mut self, effect: BasicEffect){ 
+        self.effect = Some(effect);
+    }
+
+    pub fn get_effect(&self) -> &BasicEffect{
+        return self.effect.as_ref().unwrap();
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -116,7 +76,7 @@ impl State {
         self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&[bytes]));
     }
 
-    pub fn render(&mut self, gpu_object: &crate::camera::GPUObject<crate::camera::Uniforms>) -> Result<(), wgpu::SwapChainError> {
+    pub fn render(&mut self) -> Result<(), wgpu::SwapChainError> {
         let frame = self.swap_chain.get_current_frame()?.output;
 
         let mut encoder = self.device
@@ -149,16 +109,12 @@ impl State {
                 }),
             });
             
-            match &self.render_pipeline{
-                Some(rp) => {
-                    render_pass.set_pipeline(&rp); // 2.
-                    render_pass.set_bind_group(0, &gpu_object.bind_group, &[]); //TODO, the gpu object should know what its bind group is.
-                    render_pass.draw(0..3, 0..1); // 3.
+            match &self.effect{
+                Some(effect) => {
+                    effect.render(&mut render_pass);
                 },
                 None => panic!("The Render pipeline was not initialized, please include init_pipleine somehwere in the code"),
             }
-            
-
         }
 
         self.queue.submit(iter::once(encoder.finish()));
@@ -167,13 +123,13 @@ impl State {
     }
 }
 
-pub struct BasicEffect<T> {
+pub struct BasicEffect {
     pub render_pipeline: wgpu::RenderPipeline,
-    pub camera_obj: GPUObject<T>,
+    pub camera_obj: GPUObject<crate::camera::Uniforms>,
 }
 
-impl<T> BasicEffect<T> {
-    pub fn new(gpu: State, camera_obj: GPUObject<T>) -> Self{
+impl BasicEffect {
+    pub fn new(gpu: &State, camera_obj: GPUObject<crate::camera::Uniforms>) -> Self{
         let vs_module = gpu.device.create_shader_module(&wgpu::include_spirv!("shader.vert.spv"));
         let fs_module = gpu.device.create_shader_module(&wgpu::include_spirv!("shader.frag.spv"));
 
@@ -232,9 +188,18 @@ impl<T> BasicEffect<T> {
         }
     }
 
-    pub fn render<'a>(&'a mut self, render_pass: &mut wgpu::RenderPass<'a>){
+    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>){
         render_pass.set_pipeline(&self.render_pipeline); // 2.
         render_pass.set_bind_group(self.camera_obj.binding, &self.camera_obj.bind_group, &[]); //TODO, the gpu object should know what its bind group is.
         render_pass.draw(0..3, 0..1); // 3.
     }
+
+    pub fn write_buffer(&self, gpu: &State, buffer: &wgpu::Buffer, bytes: impl bytemuck::Pod ){
+        gpu.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&[bytes]));
+    }
+
+    pub fn write_camera_buffer(&self, gpu: &State, bytes: impl bytemuck::Pod ){
+        gpu.queue.write_buffer(&self.camera_obj.buffer, 0, bytemuck::cast_slice(&[bytes]));
+    }
+
 }
